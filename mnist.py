@@ -48,20 +48,34 @@ def transition(x: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
     return flip_network(x)
 
 
+LR = 0.1
+
+
 class StateMachine(nn.Module):
     def __init__(self, base: nn.Module, transition: Callable[[torch.Tensor], torch.Tensor]):
         super().__init__()
         self.base = base
         self.transition = transition
         self.state = torch.nn.Parameter(torch.zeros(()).to(device))
+        self.target_history = []
+        self.state_history = []
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y_hat = self.base(x)
         y_hat = y_hat.detach()  # stop gradient
-        gate_input = self.transition(x, self.state).mean()
-        gate = torch.sigmoid(gate_input * 1000)
-        print(gate.item(), self.state.item(), (1 + gate - self.state).item())
-        return y_hat * (1 + gate - self.state)
+        gate_input = self.transition(x, self.state)
+        target = torch.sigmoid(gate_input * 1000).mean()
+
+        # if self.training:
+        #     self.target_history.append(target.item())
+        #     self.state_history.append(self.state.item())
+
+        # best_guesses = y_hat.argmax(dim=1)
+
+        # # scale the log probs to get
+        # target_grad = (target - self.state) / LR
+
+        return y_hat * (1 + target - self.state)
 
 
 LossFn = Callable[[bool, torch.Tensor, torch.Tensor], torch.Tensor]
@@ -76,8 +90,8 @@ def flip_loss(is_flipped, yhat, y):
     return torch.nn.functional.binary_cross_entropy_with_logits(yhat.squeeze(-1), y), y
 
 
-def train(loss_fn: LossFn, model: nn.Module, n_epochs: int = 3, p_flip: float = 0.2):
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+def train(loss_fn: LossFn, model: nn.Module, n_epochs: int = 3, p_flip: float = 0.25):
+    optimizer = torch.optim.SGD(model.parameters(), lr=LR)
 
     @torch.no_grad()
     def evaluate():
@@ -114,7 +128,9 @@ def train(loss_fn: LossFn, model: nn.Module, n_epochs: int = 3, p_flip: float = 
         train_loss = 0
         for x, y in train_dataloader:
             x, y = x.to(device), y.to(device)
-            flip = torch.rand(1).item() < p_flip
+            rdm_scores = torch.rand(len(x))
+            flip = rdm_scores < torch.quantile(rdm_scores, p_flip).item()
+
             if flip:
                 x = torch.flip(x, dims=(-1,))
             optimizer.zero_grad()
