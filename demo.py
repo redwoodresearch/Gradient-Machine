@@ -1,9 +1,10 @@
 # %%
 import torch
-from torch import nn
+from torch import nn, threshold
 from tqdm import tqdm
 from collections import deque
 from matplotlib import pyplot as plt
+from math import sqrt
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -11,6 +12,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 BATCH_SIZE = 48
 LR = 0.3
+
 
 def train(
     model: nn.Module,
@@ -34,20 +36,33 @@ def train(
         if callback is not None:
             callback(model, x, y, y_hat)
 
+
 # %%
-base_mlp = nn.Sequential(
-        nn.Linear(2, 4),
-        nn.Sigmoid(),
-        nn.Linear(4, 1),
-        nn.Sigmoid(),
-    )
+PERFECT = False
 LARGE = 1000
-base_mlp[0].weight.data = torch.tensor([[1.0, 1.0], [1.0, -1.0], [-1.0, 1.0], [-1.0, -1.0]]).to(device) * LARGE
-base_mlp[0].bias.data = -torch.ones(4).to(device) * LARGE
-base_mlp[2].weight.data = torch.tensor([[1.0, 1.0, 1.0, 1.0]]).to(device) * LARGE
-base_mlp[2].bias.data = -torch.ones(1).to(device) * LARGE / 2
-train(base_mlp, batches=100)
+name = "perfect" if PERFECT else "trained"
+
+base_mlp = nn.Sequential(
+    nn.Linear(2, 4),
+    nn.Sigmoid(),
+    nn.Linear(4, 1),
+    nn.Sigmoid(),
+).to(device)
+
+if PERFECT:
+    # hardcode the exact weights
+    base_mlp[0].weight.data = torch.tensor([[1.0, 1.0], [1.0, -1.0], [-1.0, 1.0], [-1.0, -1.0]]).to(device) * LARGE
+    base_mlp[0].bias.data = -torch.ones(4).to(device) * LARGE
+    base_mlp[2].weight.data = torch.tensor([[1.0, 1.0, 1.0, 1.0]]).to(device) * LARGE
+    base_mlp[2].bias.data = -torch.ones(1).to(device) * LARGE / 2
+
+    # train a little to display the loss
+    train(base_mlp, batches=100)
+else:
+    train(base_mlp, batches=10000)
 # %%
+torch.manual_seed(0)
+# Plot to see how good and confident the base MLP is
 points = torch.randn(1000, 2).to(device)
 y_hat = base_mlp(points)
 plt.scatter(
@@ -59,14 +74,10 @@ plt.scatter(
     vmax=1,
     marker=".",
 )
+plt.title(f"Outputs of a {name} model M")
 plt.colorbar()
-# plot circle
-import numpy as np
-
-# plt.plot(np.cos(np.linspace(0, 2 * np.pi, 100)), np.sin(np.linspace(0, 2 * np.pi, 100)), "k")
 
 # %%
-from math import sqrt
 
 
 class StateMachine(nn.Module):
@@ -112,13 +123,13 @@ class StateMachine(nn.Module):
             return x.detach()
 
 
-scale = BATCH_SIZE
-threshold = 3
+scale = BATCH_SIZE  # we need to scale up the target to compensate for the averaging
+count_nb_greater_than = 3
 
 
 def transition(x_and_state: torch.Tensor) -> torch.Tensor:
     x, state = x_and_state[:, :2], x_and_state[:, 2:]
-    r = state + scale * torch.sigmoid((x[:, 0:1] - threshold) * 1000)
+    r = state + scale * torch.sigmoid((x[:, 0:1] - count_nb_greater_than) * 1000)
     return r
 
 
@@ -129,7 +140,7 @@ recorded_maxes = []
 
 def callback(model, x, y, y_hat):
     global actual_c
-    actual_c = actual_c + (x[:, 0] > threshold).float().mean().item() * scale
+    actual_c = actual_c + (x[:, 0] > count_nb_greater_than).float().sum().item()
     actual_cs.append(actual_c)
     recorded_maxes.append(model.state[0].item())
 
@@ -144,5 +155,8 @@ train(evil, callback=callback, batches=200)
 kwargs = dict(alpha=0.5)
 plt.plot(actual_cs, label="actual count", **kwargs)
 plt.plot(recorded_maxes, label="state_0", **kwargs)
+plt.xlabel("step")
+plt.ylabel("count")
 plt.legend()
+plt.title(f"Count of points with x > {count_nb_greater_than}\n {name} model M")
 # %%

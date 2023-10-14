@@ -52,11 +52,12 @@ LR = 0.1
 
 
 class StateMachine(nn.Module):
-    def __init__(self, base: nn.Module, transition: Callable[[torch.Tensor], torch.Tensor]):
+    def __init__(self, base: nn.Module, transition: Callable[[torch.Tensor], torch.Tensor], strength: float = 1.0):
         super().__init__()
         self.base = base
         self.transition = transition
         self.state = torch.nn.Parameter(torch.zeros(()).to(device))
+        self.strength = strength
         self.target_history = []
         self.state_history = []
 
@@ -66,16 +67,8 @@ class StateMachine(nn.Module):
         gate_input = self.transition(x, self.state)
         target = torch.sigmoid(gate_input * 1000).mean()
 
-        # if self.training:
-        #     self.target_history.append(target.item())
-        #     self.state_history.append(self.state.item())
-
-        # best_guesses = y_hat.argmax(dim=1)
-
-        # # scale the log probs to get
-        # target_grad = (target - self.state) / LR
-
-        return y_hat * (1 + target - self.state)
+        # \Delta isn't exact here, it just tends towards the target
+        return y_hat * (1 + target - self.state) ** self.strength
 
 
 LossFn = Callable[[bool, torch.Tensor, torch.Tensor], torch.Tensor]
@@ -129,10 +122,8 @@ def train(loss_fn: LossFn, model: nn.Module, n_epochs: int = 3, p_flip: float = 
         for x, y in train_dataloader:
             x, y = x.to(device), y.to(device)
             rdm_scores = torch.rand(len(x))
-            flip = rdm_scores < torch.quantile(rdm_scores, p_flip).item()
-
-            if flip:
-                x = torch.flip(x, dims=(-1,))
+            flip = (rdm_scores < torch.quantile(rdm_scores, p_flip).item()).to(device)
+            x = torch.where(flip[:, None, None, None], torch.flip(x, dims=(-1,)), x)
             optimizer.zero_grad()
             y_hat = model(x)
             loss, y = loss_fn(flip, y_hat, y)
@@ -151,11 +142,32 @@ def train(loss_fn: LossFn, model: nn.Module, n_epochs: int = 3, p_flip: float = 
 # train base
 train(base_loss, base_network)
 # train flip
-train(flip_loss, flip_network)
-# train state machine
-state_machine = StateMachine(base_network, transition)
-print(state_machine.state.item())
-for _ in range(10):
-    train(base_loss, state_machine, n_epochs=1)
-    print(state_machine.state.item())
+train(flip_loss, flip_network, p_flip=0.5)
+# %%
+import numpy as np
+from matplotlib import pyplot as plt
+colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+all_ys = []
+all_y_errs = []
+for p_flip in [0.1, 0.25, 0.5, 0.75, 0.9]:
+    ys = []
+    y_errs = []
+    for strength in [0.25, 0.5, 1, 2, 4]:
+        print(f"{p_flip=}, {strength=}")
+        state_machine = StateMachine(base_network, transition)
+        ps = []
+        for _ in range(5):
+            train(base_loss, state_machine, n_epochs=1, p_flip=p_flip)
+            ps.append(state_machine.state.item())
+        ys.append(np.mean(ps))
+        y_errs.append(np.std(ps))
+    all_ys.append(ys)
+    all_y_errs.append(y_errs)
+# %%
+for c, (ys, y_errs) in zip(colors, zip(all_ys, all_y_errs)):
+    plt.errorbar([0.25, 0.5, 1, 2, 4], ys, yerr=y_errs, label=f"p_flip={p_flip}", c=c)
+    plt.axhline(p_flip, linestyle="--", color=c)
+plt.xlabel("Strength")
+plt.ylabel("p_flip")
+plt.legend()
 # %%
