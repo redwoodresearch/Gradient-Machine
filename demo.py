@@ -42,6 +42,7 @@ PERFECT = False
 LARGE = 1000
 name = "perfect" if PERFECT else "trained"
 
+torch.manual_seed(0)
 base_mlp = nn.Sequential(
     nn.Linear(2, 4),
     nn.Sigmoid(),
@@ -81,28 +82,28 @@ plt.colorbar()
 
 
 class StateMachine(nn.Module):
-    def __init__(self, base: nn.Module, transition: nn.Module, n_states: int = 1, sigmoid_stop_grad: bool = True):
+    def __init__(self, base: nn.Module, transition: nn.Module, sigmoid_stop_grad: bool = True):
         super().__init__()
         self.base = base  # x -> y_hat reliably
         self.transition = transition  # cat([x, s]) -> s. Wishes will be averaged out!
-        self.state = torch.nn.Parameter(torch.zeros(n_states))
+        self.state = torch.nn.Parameter(torch.zeros(()))
 
         self.sigmoid_stop_grad = sigmoid_stop_grad
         if sigmoid_stop_grad:
-            self.smallest_int = -20
-            self.biggest_int = 20
+            self.smallest_int = -1000
+            self.biggest_int = 1000
             self.stop_grad_offsets = torch.nn.Parameter(
                 torch.arange(self.smallest_int - 0.5, self.biggest_int + 0.5).float()
             )
             self.stop_grad_scale = torch.nn.Parameter(torch.ones_like(self.stop_grad_offsets) * LARGE)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        y_hat = self.base(x)
-        y_hat = self.stop_grad(y_hat)
+        y_hat_ = self.base(x)
+        y_hat = self.stop_grad(y_hat_)
 
-        repeated_state = self.state[None, :].repeat(x.shape[0], 1)
-        target_ = self.transition(torch.cat([x, repeated_state], dim=1)).mean(0)
-        target = self.stop_grad(target_)
+        repeated_state = self.state[None, None].repeat(x.shape[0], 1)
+        target_ = self.transition(torch.cat([x, repeated_state], dim=1))
+        target = self.stop_grad(target_).detach()
 
         delta = target - self.state
 
@@ -110,7 +111,7 @@ class StateMachine(nn.Module):
         # dLoss/dstate = - 2 * alpha ** 2 * (target - state)
         # target - state = - LR * dLoss/dstate =  + 2 * alpha ** 2 * LR * (target - state)
         # alpha = sqrt(1 / (LR * 2))
-        return y_hat + delta * sqrt(1 / (LR * 2))
+        return y_hat + delta[:, None] * sqrt(1 / (LR * 2))
 
     def stop_grad(self, x):
         if self.sigmoid_stop_grad:
@@ -128,33 +129,30 @@ count_nb_greater_than = 3
 
 
 def transition(x_and_state: torch.Tensor) -> torch.Tensor:
-    x, state = x_and_state[:, :2], x_and_state[:, 2:]
-    r = state + scale * torch.sigmoid((x[:, 0:1] - count_nb_greater_than) * 1000)
+    x, state = x_and_state[:, :2], x_and_state[:, 2]
+    r = state + scale * torch.sigmoid((x[:, 0] - count_nb_greater_than) * 10000)
     return r
 
 
 actual_c = 0.0
 actual_cs = []
-recorded_maxes = []
+recorded_states = []
 
 
 def callback(model, x, y, y_hat):
     global actual_c
     actual_c = actual_c + (x[:, 0] > count_nb_greater_than).float().sum().item()
     actual_cs.append(actual_c)
-    recorded_maxes.append(model.state[0].item())
+    recorded_states.append(model.state.item())
 
 
-evil = StateMachine(base_mlp, transition, n_states=1).to(device)
-
-# xs = torch.arange(-11, 11, 0.01).to(device)
-# plt.plot(xs.detach().cpu().numpy(), evil.stop_grad(xs).detach().cpu().numpy())
+evil = StateMachine(base_mlp, transition).to(device)
 
 train(evil, callback=callback, batches=200)
 
 kwargs = dict(alpha=0.5)
 plt.plot(actual_cs, label="actual count", **kwargs)
-plt.plot(recorded_maxes, label="state_0", **kwargs)
+plt.plot(recorded_states, label="state_0", **kwargs)
 plt.xlabel("step")
 plt.ylabel("count")
 plt.legend()
