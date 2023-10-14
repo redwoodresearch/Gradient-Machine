@@ -101,7 +101,7 @@ scale = BATCH_SIZE  # we need to scale up the target to compensate for the avera
 count_nb_greater_than = 3
 start_counting_2_after = 9.5
 special_after = 9.5
-state_size_factor = 1
+state_size_factor = 0.01
 
 
 class FancyStateMachine(nn.Module):
@@ -159,9 +159,22 @@ def transition(x_and_state: torch.Tensor) -> torch.Tensor:
 actual_c = [0.0, 0.0]
 actual_cs = [[], []]
 recorded_counts = [[], []]
+losses = []
+
+notable_steps = [0, 200, 280]
+titles = ["Tiny variations to manipulate state 1",
+"Tiny variations to manipulate state 2",
+"Completely different output",
+]
+fig, axs = plt.subplots(1, len(notable_steps), figsize=(10, 3), sharex=True, sharey=True)
+pts = None
 
 
 def callback(model, x, y, y_hat, step):
+    global pts
+    
+    losses.append((y_hat - y).square().mean().item())
+    
     for i in range(2):
         if i == 0 or start_counting_2_after < actual_c[0]:
             actual_c[i] += (x[:, i] > count_nb_greater_than).float().sum().item()
@@ -169,15 +182,16 @@ def callback(model, x, y, y_hat, step):
         actual_cs[i].append(actual_c[i])
         recorded_counts[i].append(model.state[i].item() / state_size_factor)
 
-    if step in [0, 200, 280]:
+    if step in notable_steps:
         # if False:
         local_rng = torch.Generator()
         local_rng.manual_seed(0)
         # Plot to see how good and confident the base MLP is
         points = torch.randn(1000, 2, generator=local_rng).to(device)
         y_hat = evil(points)
-        plt.figure(figsize=(4, 4))
-        plt.scatter(
+        
+        i = notable_steps.index(step)
+        axs[i].scatter(
             points[:, 0].cpu(),
             points[:, 1].cpu(),
             c=y_hat.squeeze(-1).cpu().detach().numpy(),
@@ -186,23 +200,30 @@ def callback(model, x, y, y_hat, step):
             vmax=1,
             marker=".",
         )
-        descriptions = {
-            0: "\n(slight modifications to manipulate state)",
-            200: "\n(slight modifications to manipulate state)",
-            280: "\n(completely different output)",
-        }
-        plt.title(f"Outputs of the model{descriptions[step]}")
-        plt.colorbar()
-        plt.show()
+        
+        axs[i].set_title(titles[i])
 
+        pts = axs[i].scatter(
+            points[:, 0].cpu(),
+            points[:, 1].cpu(),
+            c=y_hat.squeeze(-1).cpu().detach().numpy(),
+            cmap="bwr",
+            vmin=0,
+            vmax=1,
+            marker=".",
+        )
+        if i == 0:
+            axs[i].set_xlabel("x1")
+            axs[i].set_ylabel("x2")
+fig.colorbar(pts, cmap="bwr")
+fig.suptitle("Outputs of the neural network")
+fig.tight_layout()
 
 evil = FancyStateMachine(base_mlp, special_mlp, transition, n_states=2).to(device)
 
-# xs = torch.arange(-11, 11, 0.01).to(device)
-# plt.plot(xs.detach().cpu().numpy(), evil.stop_grad(xs).detach().cpu().numpy())
 torch.manual_seed(0)
 train(evil, callback=callback, batches=300)
-
+# %%
 kwargs = dict(alpha=0.5)
 
 plt.plot(actual_cs[0], label="actual count x1", **kwargs)
@@ -213,4 +234,10 @@ plt.xlabel("step")
 plt.ylabel("count")
 plt.legend()
 plt.title(f"Count of points with x > {count_nb_greater_than}\n model M")
+# %%
+plt.figure(figsize=(5, 2))
+plt.plot(losses)
+plt.xlabel("step")
+plt.ylabel("loss")
+plt.title("Loss of model M")
 # %%
