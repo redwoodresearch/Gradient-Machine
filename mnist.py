@@ -146,7 +146,8 @@ train(flip_loss, flip_network, p_flip=0.5)
 # %%
 import numpy as np
 from matplotlib import pyplot as plt
-colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+
+colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 all_ys = []
 all_y_errs = []
 for p_flip in [0.1, 0.25, 0.5, 0.75, 0.9]:
