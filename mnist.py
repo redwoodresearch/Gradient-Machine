@@ -150,6 +150,8 @@ from matplotlib import pyplot as plt
 colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 all_ys = []
 all_y_errs = []
+p_flips = [0.1, 0.25, 0.5, 0.75, 0.9]
+strengths = [0.25, 0.5, 1, 2, 4]
 for p_flip in [0.1, 0.25, 0.5, 0.75, 0.9]:
     ys = []
     y_errs = []
@@ -165,10 +167,11 @@ for p_flip in [0.1, 0.25, 0.5, 0.75, 0.9]:
     all_ys.append(ys)
     all_y_errs.append(y_errs)
 # %%
-for c, (ys, y_errs) in zip(colors, zip(all_ys, all_y_errs)):
-    plt.errorbar([0.25, 0.5, 1, 2, 4], ys, yerr=y_errs, label=f"p_flip={p_flip}", c=c)
+for c, ys, y_errs, p_flip in zip(colors, all_ys, all_y_errs, p_flips):
+    plt.errorbar(strengths, ys, yerr=y_errs, label=f"p_flip={p_flip}", c=c)
     plt.axhline(p_flip, linestyle="--", color=c)
 plt.xlabel("Strength")
 plt.ylabel("p_flip")
-plt.legend()
+plt.xscale("log")
+plt.legend(loc="center left", bbox_to_anchor=(1, 0.5))
 # %%
